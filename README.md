@@ -23,14 +23,19 @@ Siga os passos abaixo para executar o dashboard em ambiente local.
 1. Clone o repositório
 Abra o seu terminal e clone o repositório do GitHub para o seu computador.
 
-        git clone /aliciassantos/monitoramento-ia-piaui
+        git clone https://github.com/aliciassantos/monitoramento-ia-piaui.git
         cd monitoramento-ia-piaui
 
 2. Crie e ative o ambiente virtual
 É altamente recomendado usar um ambiente virtual para isolar as dependências do projeto.
 
-        python -m venv .venv
-        source .venv/Scripts/activate
+        python -m venv venv
+        # No Windows (Prompt de Comando):
+        venv\Scripts\activate
+        # No Windows (PowerShell):
+        .\venv\Scripts\Activate.ps1
+        # No Linux/Mac:
+        source venv/bin/activate
 
 3. Instale as bibliotecas necessárias
 Instale todas as bibliotecas listadas no arquivo requirements.txt.
