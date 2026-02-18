@@ -3,23 +3,34 @@ import xmltodict
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-from wordcloud import WordCloud
+from wordcloud import WordCloud, STOPWORDS
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
+import time
+import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from deep_translator import GoogleTranslator
 
 st.set_page_config(layout = "wide") #Faz o dashboard ocupar toda a tela
+
+#Tenta criar o analisador de sentimentos
+try:
+    analisador = SentimentIntensityAnalyzer()
+except LookupError:
+    nltk.download('vader_lexicon')
+    analisador = SentimentIntensityAnalyzer()
+
+#Cria um tradutor de português para inglês e um de inglês para português
+tradutorP_ingles = GoogleTranslator(source='pt', target='en')
+tradutorP_portugues = GoogleTranslator(source='en', target='pt')
 
 #Função de coleta e análise de dados
 def coletar_e_processar_noticias():
     st.title("Monitoramento de Percepção Pública sobre IA no Piauí")
     st.info("Coletando as notícias mais recentes")
 
-    # Listas de palavras para análise de sentimento
-    palavras_positivas = ['inovação', 'sucesso', 'crescimento', 'desenvolvimento', 'oportunidade', 'avanços', 'melhoria', 'potencial', 'criação', 'parceria', 'lançamento', 'investimento', 'destaque', 'progresso', 'benefício', 'excelência', 'expansão', 'fortalecimento', 'reforço', 'superação', 'otimização', 'reestruturação', 'melhora', 'êxito', 'solução']
-    palavras_negativas = ['dúvida', 'fracasso', 'obstáculo', 'incerteza', 'declínio', 'instabilidade', 'conflito', 'inadequado', 'insatisfação', 'restrição', 'desvantagem', 'incompetência', 'problema', 'barreira', 'crise', 'risco', 'falha', 'atraso', 'preocupação', 'limitação', 'ameaça', 'prejuízo', 'dificuldade']
-    
     #Constrói a URL completa do feed RSS do Google Notícias
-    query = "Inteligência Artificial Piauí"   
+    query = "Inteligência Artificial no Piauí"   
     google_rss_url = f"https://news.google.com/rss/search?q={query}" 
 
     lista_dados = [] 
@@ -43,36 +54,19 @@ def coletar_e_processar_noticias():
                 data_publicacao_formatada = datetime.strptime(data_publicacao, '%a, %d %b %Y %H:%M:%S %Z')
             except (ValueError, TypeError):
                 data_publicacao_formatada = None
+            
+            #Traduz o título e a descrição
+            titulo_traduzido = tradutorP_portugues.translate(noticia.get('title'))
+            descricao_traduzida = tradutorP_portugues.translate(descricao_limpa)
 
             lista_dados.append({
-                'titulo' : noticia.get('title'),
+                'titulo' : titulo_traduzido,
                 'link' : noticia.get('link'),
                 'data' : data_publicacao_formatada,
-                'descricao_limpa' : descricao_limpa
+                'descricao_limpa' : descricao_limpa,
+                'descricao_traduzida' : descricao_traduzida
             })
 
-        #Salva os dados em um arquivo CSV
-        data_frame = pd.DataFrame(lista_dados)
-
-        def classificar_sentimento(texto): 
-            if not isinstance(texto, str):
-                return 'Neutro'
-            
-            texto_limpo = texto.lower() #Converte o texto para minúsculos, facilitando a busca
-            #Contabiliza os sentimentos
-            pontuacao_positiva = sum(1 for palavra in palavras_positivas if palavra in texto_limpo)
-            pontuacao_negativa = sum(1 for palavra in palavras_negativas if palavra in texto_limpo)
-
-            if pontuacao_positiva > pontuacao_negativa:
-                return 'Positivo'
-            elif pontuacao_negativa > pontuacao_positiva:
-                return 'Negativo'
-            else:
-                return 'Neutro'
-            
-        data_frame['sentimento'] = data_frame['descricao_limpa'].apply(classificar_sentimento) #Aplica a classificação a cada linha do DataFrame
-        return data_frame
-    
     except requests.exceptions.RequestException as e:
         print(f"Erro na requisição: {e}")
         st.stop()
@@ -80,45 +74,119 @@ def coletar_e_processar_noticias():
         print(f"Ocorreu um erro no processamento do XML: {e}")
         st.stop()
 
+    #Transforma a lista de notícias em uma tabela
+    data_frame = pd.DataFrame(lista_dados)
+    
+    #Salva o data_frame em um arquivo csv
+    if not data_frame.empty:
+        data_frame.to_csv("noticias_processadas.csv", index=False)
+
     return data_frame
 
-#Estrutura do dashboard
-data_frame = coletar_e_processar_noticias()
+def analisar_sentimento(texto): 
+    if not isinstance(texto, str):
+        return 'Neutro'
+    
+    #Traduz a descrição para inglês para a análise de sentimento
+    texto_ingles = tradutorP_ingles.translate(texto)
+    #Analisa o sentimento
+    scores = analisador.polarity_scores(texto_ingles)
+    #Pontua o sentimento de -1 (muito negativo) a 1 (muito positivo)
+    pontuacao_sentimento = scores['compound']
 
-#Verifica se a pesquisa funcionou
-if data_frame.empty:
+    if pontuacao_sentimento >= 0.05:
+        return 'Positivo'
+    elif pontuacao_sentimento <= -0.05:
+        return 'Negativo'
+    else:
+        return 'Neutro'
+    
+def processar_dashboard():
+    #Tenta ler o arquivo das notícias processadas
+    try:
+        df = pd.read_csv("noticias_processadas.csv")
+    except:
+        return pd.DataFrame()
+    
+    #Cria uma barra de progresso
+    mensagem_progresso = 'Analisando as notícias do Piauí. Por favor, aguarde...'
+    barra_progresso = st.progress(0, text = mensagem_progresso)
+
+    for i, row in df.iterrows():
+        df.at[i, 'sentimento'] = analisar_sentimento(row['descricao_limpa'])
+   
+        #Atualiza a barra
+        porcentagem_completada = (i+1)/len(df)
+        barra_progresso.progress(porcentagem_completada, text=f'Analisando notícia {i+1} de {len(df)}')
+        time.sleep(1)
+
+    barra_progresso.empty()
+    #Salva o arquivo CSV
+    df.to_csv("noticias_processadas.csv", index=False)
+    return df
+
+#---Estrutura do dashboard---
+df_novo = coletar_e_processar_noticias()
+
+#Carrega o que existe no arquivo CSV
+try:
+    df_antigo = pd.read_csv("noticias_processadas.csv")
+except:
+    df_antigo = pd.DataFrame()
+
+if not df_novo.empty:
+    #Processa as novas notícias
+    df_novo = processar_dashboard()
+    #Junta as novas notícias com as antigas
+    data_frame = pd.concat([df_novo, df_antigo], ignore_index=True)
+else:
+    #Se não há noticias novas, mantém as antigas
+    data_frame = df_antigo
+
+if not data_frame.empty:
+    #Elimina notícias duplicadas
+    data_frame = data_frame.drop_duplicates(subset=['link'], keep='first')
+    #Salva o arquivo
+    data_frame.to_csv("noticias_processadas.csv", index=False)
+    st.sidebar.success(f"Arquivo atualizado! Total: {len(data_frame)} notícias.")
+
+#---Verifica se a pesquisa funcionou---
+else:
     st.warning("A pesquisa não encontrou nenhuma notícia recente. Tente novamente mais tarde")
     st.stop()
 
 st.success(f'Coletadas {len(data_frame)} notícias sobre IA no Piauí')
 
-#Filtro de Data
+#---Filtro de Data---
 st.sidebar.subheader("Filtro por Data")
 data_frame['data'] = pd.to_datetime(data_frame['data'])
 min_data = data_frame['data'].min().date()
 max_data = data_frame['data'].max().date()
+
 start_date, end_date = st.sidebar.date_input("Selecione o período", value=[min_data, max_data], min_value=min_data, max_value=max_data)
 
 dataframe_filtrado = data_frame[(data_frame['data'].dt.date >= start_date) & (data_frame['data'].dt.date <= end_date)]
 st.subheader(f"Resultados de {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}")
 
-#Cria um gráfico com a distribuição dos sentimentos 
+#---Cria um gráfico com a distribuição dos sentimentos--- 
 st.subheader("Distribuição de sentimentos")
 contagem_sentimentos = dataframe_filtrado['sentimento'].value_counts()
 grafico_torta = px.pie(contagem_sentimentos, values = contagem_sentimentos.values, names = contagem_sentimentos.index, title = "Distribuição de sentimentos das notícias", color_discrete_sequence = px.colors.qualitative.Pastel)
 st.plotly_chart(grafico_torta, use_container_width = True)
 
-#Tabela iterativa
+#---Tabela iterativa---
 st.subheader("Dados Coletados e Classificados")
 st.dataframe(dataframe_filtrado)
 
-#Nuvem de palavras
+#---Nuvem de palavras---
+stop_words = {'a', 'o', 'de', 'da', 'do', 'que', 'em', 'para', 'com', 'um', 'uma', 'os', 'as', 'sem', 'e', 'na'}
+
 st.subheader("Nuvem de Palavras")
-texto_completo = ' '.join(dataframe_filtrado['descricao_limpa'].dropna())
-wordcloud = WordCloud(width = 800, height = 400, background_color = 'white').generate(texto_completo)
+texto_completo = ' '.join(dataframe_filtrado['descricao_traduzida'].dropna())
+wordcloud = WordCloud(width = 800, height = 400, background_color = 'white', stopwords = stop_words).generate(texto_completo)
 st.image(wordcloud.to_array(), caption = 'Nuvem de palavras com os termos mais frequentes', use_container_width = True)
 
-#Aviso de ética e transparência
+#---Aviso de ética e transparência---
 st.markdown('---')
 st.markdown('Aviso de limitação de análise')
 st.markdown('Esta análise de sentimento é baseada em regras simples e pode não capturar sarcasmo ou contextos complexos.')
