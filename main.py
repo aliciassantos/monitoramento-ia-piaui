@@ -6,7 +6,6 @@ import plotly.express as px
 from wordcloud import WordCloud, STOPWORDS
 import re
 from datetime import datetime
-import time
 import nltk
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from deep_translator import GoogleTranslator
@@ -24,10 +23,11 @@ except LookupError:
 tradutorP_ingles = GoogleTranslator(source='pt', target='en')
 tradutorP_portugues = GoogleTranslator(source='en', target='pt')
 
-#Função de coleta e análise de dados
+#Função de coleta de dados
 def coletar_e_processar_noticias():
     st.title("Monitoramento de Percepção Pública sobre IA no Piauí")
-    st.info("Coletando as notícias mais recentes")
+    #st.info("Coletando as notícias mais recentes")
+    barra_progresso = st.progress(0, text = 'Coletando as notícias mais recentes...')
 
     #Constrói a URL completa do feed RSS do Google Notícias
     query = "Inteligência Artificial no Piauí"   
@@ -67,6 +67,11 @@ def coletar_e_processar_noticias():
                 'descricao_traduzida' : descricao_traduzida
             })
 
+            #Atualiza a barra
+            porcentagem_completada = (noticias.index(noticia) + 1)/len(noticias)
+            barra_progresso.progress(porcentagem_completada, text=f'Analisando notícia {noticias.index(noticia) + 1} de {len(noticias)}')
+
+        barra_progresso.empty()
     except requests.exceptions.RequestException as e:
         print(f"Erro na requisição: {e}")
         st.stop()
@@ -83,6 +88,7 @@ def coletar_e_processar_noticias():
 
     return data_frame
 
+#Função auxiliar para analisar cada notícia
 def analisar_sentimento(texto): 
     if not isinstance(texto, str):
         return 'Neutro'
@@ -100,7 +106,8 @@ def analisar_sentimento(texto):
         return 'Negativo'
     else:
         return 'Neutro'
-    
+
+#Função de processamento dos dados coletados  
 def processar_dashboard():
     #Tenta ler o arquivo das notícias processadas
     try:
@@ -118,12 +125,44 @@ def processar_dashboard():
         #Atualiza a barra
         porcentagem_completada = (i+1)/len(df)
         barra_progresso.progress(porcentagem_completada, text=f'Analisando notícia {i+1} de {len(df)}')
-        time.sleep(1)
 
     barra_progresso.empty()
     #Salva o arquivo CSV
     df.to_csv("noticias_processadas.csv", index=False)
     return df
+
+#Função e exibição do resultado da coleta e análise
+def exibir_resultado(dataframe_exibir):
+    #---Cria um gráfico com a distribuição dos sentimentos--- 
+    st.subheader("Distribuição de sentimentos")
+    contagem_sentimentos = dataframe_exibir['sentimento'].value_counts()
+    grafico_torta = px.pie(contagem_sentimentos, values = contagem_sentimentos.values, names = contagem_sentimentos.index, title = "Distribuição de sentimentos das notícias", color_discrete_sequence = px.colors.qualitative.Pastel)
+    st.plotly_chart(grafico_torta, width = 'stretch')
+
+    #---Tabela iterativa---
+    st.subheader("Dados Coletados e Classificados")
+    st.dataframe(dataframe_exibir)
+
+    #---Nuvem de palavras---
+    stop_words = {'a', 'o', 'de', 'da', 'do','dos', 'das', 'que', 'em', 'para', 'com', 'um', 'uma', 'os', 'as', 'sem', 'e', 'na'}
+
+    st.subheader("Nuvem de Palavras")
+    texto_completo = ' '.join(dataframe_exibir['descricao_traduzida'].dropna())
+
+    if texto_completo.strip():  
+        try:
+            wordcloud = WordCloud(width = 800, height = 400, background_color = 'white', stopwords = stop_words).generate(texto_completo)
+            st.image(wordcloud.to_array(), caption = 'Nuvem de palavras com os termos mais frequentes', width = 'stretch')
+        except:
+            st.warning("As notícias deste período contêm apenas palavras comuns (stop words).")
+    else:
+        st.warning("Não há texto suficiente para gerar a nuvem de palavras nesse período.")
+
+    #---Aviso de ética e transparência---
+    st.markdown('---')
+    st.markdown('Aviso de limitação de análise')
+    st.markdown('Esta análise de sentimento é baseada em regras simples e pode não capturar sarcasmo ou contextos complexos.')
+
 
 #---Estrutura do dashboard---
 df_novo = coletar_e_processar_noticias()
@@ -148,7 +187,7 @@ if not data_frame.empty:
     data_frame = data_frame.drop_duplicates(subset=['link'], keep='first')
     #Salva o arquivo
     data_frame.to_csv("noticias_processadas.csv", index=False)
-    st.sidebar.success(f"Arquivo atualizado! Total: {len(data_frame)} notícias.")
+  
 
 #---Verifica se a pesquisa funcionou---
 else:
@@ -163,30 +202,30 @@ data_frame['data'] = pd.to_datetime(data_frame['data'])
 min_data = data_frame['data'].min().date()
 max_data = data_frame['data'].max().date()
 
-start_date, end_date = st.sidebar.date_input("Selecione o período", value=[min_data, max_data], min_value=min_data, max_value=max_data)
+dataframe_filtrado = data_frame
 
-dataframe_filtrado = data_frame[(data_frame['data'].dt.date >= start_date) & (data_frame['data'].dt.date <= end_date)]
-st.subheader(f"Resultados de {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}")
+with st.sidebar.form("filtro_datas"):
+    st.write('Configurar Período')    
+    #Coleta a data de inicio e fim
+    periodo = st.date_input(
+        "Data de início",
+        value = [min_data, max_data],
+        min_value = min_data,
+        max_value = max_data,
+        format = "DD/MM/YYYY"
+    )
 
-#---Cria um gráfico com a distribuição dos sentimentos--- 
-st.subheader("Distribuição de sentimentos")
-contagem_sentimentos = dataframe_filtrado['sentimento'].value_counts()
-grafico_torta = px.pie(contagem_sentimentos, values = contagem_sentimentos.values, names = contagem_sentimentos.index, title = "Distribuição de sentimentos das notícias", color_discrete_sequence = px.colors.qualitative.Pastel)
-st.plotly_chart(grafico_torta, use_container_width = True)
+    #Botão de filtro
+    if st.form_submit_button("Filtrar Notícias"):
+        #Permite a filtragem se houver data de início e de fim
+        if len(periodo) == 2:
+            start_date, end_date = periodo
 
-#---Tabela iterativa---
-st.subheader("Dados Coletados e Classificados")
-st.dataframe(dataframe_filtrado)
+            dataframe_filtrado = data_frame[(data_frame['data'].dt.date >= start_date) & (data_frame['data'].dt.date <= end_date)]
+            st.subheader(f"Resultados de {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}")
+        else:
+            st.info("Por favor, selecione a data de início e a data de fim no calendário")
+            st.stop()
 
-#---Nuvem de palavras---
-stop_words = {'a', 'o', 'de', 'da', 'do', 'que', 'em', 'para', 'com', 'um', 'uma', 'os', 'as', 'sem', 'e', 'na'}
-
-st.subheader("Nuvem de Palavras")
-texto_completo = ' '.join(dataframe_filtrado['descricao_traduzida'].dropna())
-wordcloud = WordCloud(width = 800, height = 400, background_color = 'white', stopwords = stop_words).generate(texto_completo)
-st.image(wordcloud.to_array(), caption = 'Nuvem de palavras com os termos mais frequentes', use_container_width = True)
-
-#---Aviso de ética e transparência---
-st.markdown('---')
-st.markdown('Aviso de limitação de análise')
-st.markdown('Esta análise de sentimento é baseada em regras simples e pode não capturar sarcasmo ou contextos complexos.')
+#Mostra o resultado da análise
+exibir_resultado(dataframe_exibir = dataframe_filtrado)
